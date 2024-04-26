@@ -47,13 +47,39 @@ export class EDAAppStack extends cdk.Stack {
         });
 
         const newImageTopic = new sns.Topic(this, "NewImageTopic", {
-            displayName: "New Image topic",
+            displayName: "New Image Topic",
+        });
+
+        const imagesTableTopic = new sns.Topic(this, "ImagesTableTopic", {
+            displayName: "Images Table Topic",
         });
 
         // Lambda functions
-        const processImageFn = new lambdanode.NodejsFunction(this, "ProcessImageFn", {
+        const processAddImageFn = new lambdanode.NodejsFunction(this, "ProcessAddImageFn", {
             runtime: lambda.Runtime.NODEJS_18_X,
-            entry: `${__dirname}/../lambdas/processImage.ts`,
+            entry: `${__dirname}/../lambdas/processAddImage.ts`,
+            timeout: cdk.Duration.seconds(15),
+            memorySize: 128,
+            environment: {
+                TABLE_NAME: imagesTable.tableName,
+                REGION: cdk.Aws.REGION,
+            },
+        });
+
+        const processDeleteImageFn = new lambdanode.NodejsFunction(this, "ProcessDeleteImageFn", {
+            runtime: lambda.Runtime.NODEJS_18_X,
+            entry: `${__dirname}/../lambdas/processDeleteImage.ts`,
+            timeout: cdk.Duration.seconds(15),
+            memorySize: 128,
+            environment: {
+                TABLE_NAME: imagesTable.tableName,
+                REGION: cdk.Aws.REGION,
+            },
+        });
+
+        const processUpdateImageFn = new lambdanode.NodejsFunction(this, "ProcessUpdateImageFn", {
+            runtime: lambda.Runtime.NODEJS_18_X,
+            entry: `${__dirname}/../lambdas/processUpdateImage.ts`,
             timeout: cdk.Duration.seconds(15),
             memorySize: 128,
             environment: {
@@ -76,14 +102,35 @@ export class EDAAppStack extends cdk.Stack {
             entry: `${__dirname}/../lambdas/rejectMailer.ts`,
         });
 
+
         // S3 Bucket --> SNS Topic
         imagesBucket.addEventNotification(
             s3.EventType.OBJECT_CREATED,
             new s3n.SnsDestination(newImageTopic)
         );
+
+        imagesBucket.addEventNotification(
+            s3.EventType.OBJECT_REMOVED_DELETE,
+            new s3n.SnsDestination(imagesTableTopic)
+        );
+
         // Add SNS Topic subscriptions
         newImageTopic.addSubscription(new subs.SqsSubscription(imageProcessQueue));
         newImageTopic.addSubscription(new subs.LambdaSubscription(mailerFn));
+        imagesTableTopic.addSubscription(new subs.LambdaSubscription(processDeleteImageFn, {
+            filterPolicy: {
+                comment_type: sns.SubscriptionFilter.stringFilter({
+                    denylist: ['Caption']
+                }),
+            },
+        }));
+        imagesTableTopic.addSubscription(new subs.LambdaSubscription(processUpdateImageFn, {
+            filterPolicy: {
+                comment_type: sns.SubscriptionFilter.stringFilter({
+                    allowlist: ['Caption']
+                }),
+            },
+        }));
 
         // SQS --> Lambda
         const newImageEventSource = new events.SqsEventSource(imageProcessQueue, {
@@ -96,7 +143,7 @@ export class EDAAppStack extends cdk.Stack {
             maxBatchingWindow: cdk.Duration.seconds(10),
         });
 
-        processImageFn.addEventSource(newImageEventSource);
+        processAddImageFn.addEventSource(newImageEventSource);
 
         rejectMailerFn.addEventSource(rejectImageMailEventSource);
 
@@ -125,8 +172,10 @@ export class EDAAppStack extends cdk.Stack {
         );
 
         // Permissions
-        imagesBucket.grantRead(processImageFn);
-        imagesTable.grantReadWriteData(processImageFn);
+        imagesBucket.grantRead(processAddImageFn);
+        imagesTable.grantReadWriteData(processAddImageFn);
+        imagesTable.grantReadWriteData(processDeleteImageFn);
+        imagesTable.grantReadWriteData(processUpdateImageFn);
 
         // Output
         new cdk.CfnOutput(this, "bucketName", {
