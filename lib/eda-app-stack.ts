@@ -9,7 +9,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as iam from "aws-cdk-lib/aws-iam";
-
+import {StartingPosition} from "aws-cdk-lib/aws-lambda";
 import {Construct} from "constructs";
 import {Duration} from "aws-cdk-lib";
 
@@ -25,6 +25,7 @@ export class EDAAppStack extends cdk.Stack {
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             tableName: "Images",
+            stream: dynamodb.StreamViewType.OLD_IMAGE,
         });
 
         const imagesBucket = new s3.Bucket(this, "images", {
@@ -46,12 +47,8 @@ export class EDAAppStack extends cdk.Stack {
             },
         });
 
-        const newImageTopic = new sns.Topic(this, "NewImageTopic", {
-            displayName: "New Image Topic",
-        });
-
-        const imagesTableTopic = new sns.Topic(this, "ImagesTableTopic", {
-            displayName: "Images Table Topic",
+        const imageAlbumTopic = new sns.Topic(this, "ImageAlbumTopic", {
+            displayName: "Image Album Topic",
         });
 
         // Lambda functions
@@ -88,7 +85,7 @@ export class EDAAppStack extends cdk.Stack {
             },
         });
 
-        const mailerFn = new lambdanode.NodejsFunction(this, "mailer-function", {
+        const confirmMailerFn = new lambdanode.NodejsFunction(this, "confirm-mailer-function", {
             runtime: lambda.Runtime.NODEJS_16_X,
             memorySize: 1024,
             timeout: cdk.Duration.seconds(3),
@@ -102,29 +99,67 @@ export class EDAAppStack extends cdk.Stack {
             entry: `${__dirname}/../lambdas/rejectMailer.ts`,
         });
 
+        const deleteMailerFn = new lambdanode.NodejsFunction(this, "delete-mailer-function", {
+            runtime: lambda.Runtime.NODEJS_16_X,
+            memorySize: 1024,
+            timeout: cdk.Duration.seconds(3),
+            entry: `${__dirname}/../lambdas/deleteMailer.ts`,
+        });
+
 
         // S3 Bucket --> SNS Topic
         imagesBucket.addEventNotification(
             s3.EventType.OBJECT_CREATED,
-            new s3n.SnsDestination(newImageTopic)
+            new s3n.SnsDestination(imageAlbumTopic)
         );
 
         imagesBucket.addEventNotification(
             s3.EventType.OBJECT_REMOVED_DELETE,
-            new s3n.SnsDestination(imagesTableTopic)
+            new s3n.SnsDestination(imageAlbumTopic)
         );
 
-        // Add SNS Topic subscriptions
-        newImageTopic.addSubscription(new subs.SqsSubscription(imageProcessQueue));
-        newImageTopic.addSubscription(new subs.LambdaSubscription(mailerFn));
-        imagesTableTopic.addSubscription(new subs.LambdaSubscription(processDeleteImageFn, {
-            filterPolicy: {
-                comment_type: sns.SubscriptionFilter.stringFilter({
-                    denylist: ['Caption']
+        // Add SNS Topic subscriptions and filters
+        imageAlbumTopic.addSubscription(new subs.SqsSubscription(imageProcessQueue, {
+            filterPolicyWithMessageBody: {
+                Records: sns.FilterOrPolicy.policy({
+                    eventName: sns.FilterOrPolicy.filter(
+                        sns.SubscriptionFilter.stringFilter({
+                            allowlist: [
+                                "ObjectCreated:Put",
+                            ],
+                        }),
+                    ),
                 }),
             },
+            rawMessageDelivery: true
         }));
-        imagesTableTopic.addSubscription(new subs.LambdaSubscription(processUpdateImageFn, {
+        imageAlbumTopic.addSubscription(new subs.LambdaSubscription(confirmMailerFn,{
+            filterPolicyWithMessageBody: {
+                Records: sns.FilterOrPolicy.policy({
+                    eventName: sns.FilterOrPolicy.filter(
+                        sns.SubscriptionFilter.stringFilter({
+                            allowlist: [
+                                "ObjectCreated:Put",
+                            ],
+                        }),
+                    ),
+                }),
+            }
+        }));
+        imageAlbumTopic.addSubscription(new subs.LambdaSubscription(processDeleteImageFn, {
+            filterPolicyWithMessageBody: {
+                Records: sns.FilterOrPolicy.policy({
+                    eventName: sns.FilterOrPolicy.filter(
+                        sns.SubscriptionFilter.stringFilter({
+                            allowlist: [
+                                "ObjectRemoved:Delete",
+                            ],
+                        }),
+                    ),
+                }),
+            }
+        }));
+        imageAlbumTopic.addSubscription(new subs.LambdaSubscription(processUpdateImageFn, {
             filterPolicy: {
                 comment_type: sns.SubscriptionFilter.stringFilter({
                     allowlist: ['Caption']
@@ -143,11 +178,20 @@ export class EDAAppStack extends cdk.Stack {
             maxBatchingWindow: cdk.Duration.seconds(10),
         });
 
+        const deleteStreamEventSource = new events.DynamoEventSource(imagesTable, {
+            startingPosition: StartingPosition.TRIM_HORIZON,
+            batchSize: 1,
+            bisectBatchOnError: true,
+            retryAttempts: 2,
+        });
+
         processAddImageFn.addEventSource(newImageEventSource);
 
         rejectMailerFn.addEventSource(rejectImageMailEventSource);
 
-        mailerFn.addToRolePolicy(
+        deleteMailerFn.addEventSource(deleteStreamEventSource);
+
+        confirmMailerFn.addToRolePolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: [
@@ -160,6 +204,18 @@ export class EDAAppStack extends cdk.Stack {
         );
 
         rejectMailerFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "ses:SendEmail",
+                    "ses:SendRawEmail",
+                    "ses:SendTemplatedEmail",
+                ],
+                resources: ["*"],
+            })
+        );
+
+        deleteMailerFn.addToRolePolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: [
