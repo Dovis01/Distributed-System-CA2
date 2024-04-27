@@ -37,7 +37,7 @@ export const handler: SNSHandler = async (event: any) => {
                     const { name, email, message }: ContactDetails = {
                         name: "The Photo Album",
                         email: SES_EMAIL_FROM,
-                        message: `We received your Image. Its URL is s3://${srcBucket}/${srcKey}`,
+                        message: `We received your Image. Its URL is s3://${srcBucket}/${srcKey}.`,
                     };
                     const params = sendEmailParams({ name, email, message });
                     await client.send(new SendEmailCommand(params));
