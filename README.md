@@ -5,11 +5,17 @@ __Name:__ Shijin Zhang
 __YouTube Demo link__ - https://youtu.be/Gdp5QYKGEZM
 
 
-### Phase 1.
+### Phase 1
 
 + Confirmation Mailer - Fully implemented.
+  + Lambda Function: confirmMailer.ts
+
 + Rejection Mailer - Fully implemented.
+  + Lambda Function: rejectMailer.ts
+
 + Process Image - Fully implemented.
+  + Lambda Function: processAddImage.ts
+
 
 ### Phase 2 
 
@@ -17,7 +23,11 @@ __YouTube Demo link__ - https://youtu.be/Gdp5QYKGEZM
 + Rejection Mailer - Fully implemented.
 + Process Image - Fully implemented.
 + Update Table - Fully implemented (Inculding Filter).
+  + Lambda Function: processUpdateImage.ts
+
 + Process Delete Table - Fully implemented (Inculding Filter).
+  + Lambda Function: processDeleteImage.ts
+
 
 ### Phase 3 
 
@@ -26,4 +36,5 @@ __YouTube Demo link__ - https://youtu.be/Gdp5QYKGEZM
 + Process Image - Fully implemented (Inculding Filter).
 + Process Delete Table - Fully implemented (Inculding Filter).
 + Delete Mailer - Fully implemented.
+  + Lambda Function: deleteMailer.ts
 + Update Table - Fully implemented (Inculding Filter).
